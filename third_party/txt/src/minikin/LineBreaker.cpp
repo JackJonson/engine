@@ -122,13 +122,12 @@ float LineBreaker::addStyleRun(MinikinPaint* paint,
                                size_t end,
                                bool isRtl) {
   float width = 0.0f;
-  int bidiFlags = isRtl ? kBidi_Force_RTL : kBidi_Force_LTR;
 
   float hyphenPenalty = 0.0;
   if (paint != nullptr) {
     width = Layout::measureText(mTextBuf.data(), start, end - start,
-                                mTextBuf.size(), bidiFlags, style, *paint,
-                                typeface, mCharWidths.data() + start);
+                                mTextBuf.size(), isRtl, style, *paint, typeface,
+                                mCharWidths.data() + start);
 
     // a heuristic that seems to perform well
     hyphenPenalty =
@@ -195,12 +194,12 @@ float LineBreaker::addStyleRun(MinikinPaint* paint,
             paint->hyphenEdit = HyphenEdit::editForThisLine(hyph);
             const float firstPartWidth = Layout::measureText(
                 mTextBuf.data(), lastBreak, j - lastBreak, mTextBuf.size(),
-                bidiFlags, style, *paint, typeface, nullptr);
+                isRtl, style, *paint, typeface, nullptr);
             ParaWidth hyphPostBreak = lastBreakWidth + firstPartWidth;
 
             paint->hyphenEdit = HyphenEdit::editForNextLine(hyph);
             const float secondPartWidth = Layout::measureText(
-                mTextBuf.data(), j, afterWord - j, mTextBuf.size(), bidiFlags,
+                mTextBuf.data(), j, afterWord - j, mTextBuf.size(), isRtl,
                 style, *paint, typeface, nullptr);
             ParaWidth hyphPreBreak = postBreak - secondPartWidth;
 
@@ -354,6 +353,14 @@ void LineBreaker::pushBreak(int offset, float width, uint8_t hyphenEdit) {
   flags |= hyphenEdit;
   mFlags.push_back(flags);
   mFirstTabIndex = INT_MAX;
+}
+
+// libtxt: Add ability to set custom char widths. This allows manual definition
+// of the widths of arbitrary glyphs. To linebreak properly, call addStyleRun
+// with nullptr as the paint property, which will lead it to assume the width
+// has already been calculated. Used for properly breaking inline widgets.
+void LineBreaker::setCustomCharWidth(size_t offset, float width) {
+  mCharWidths[offset] = (width);
 }
 
 void LineBreaker::addReplacement(size_t start, size_t end, float width) {

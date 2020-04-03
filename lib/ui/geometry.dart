@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// @dart = 2.6
 part of dart.ui;
 
 /// Base class for [Size] and [Offset], which are both ways to describe
@@ -12,7 +13,11 @@ abstract class OffsetBase {
   ///
   /// The first argument sets the horizontal component, and the second the
   /// vertical component.
-  const OffsetBase(this._dx, this._dy);
+  const OffsetBase(double dx, double dy)
+      : _dx = dx ?? 0.0,
+        _dy = dy ?? 0.0,
+        assert(dx != null),
+        assert(dy != null);
 
   final double _dx;
   final double _dy;
@@ -81,11 +86,9 @@ abstract class OffsetBase {
   /// the right-hand-side operand respectively. Returns false otherwise.
   @override
   bool operator ==(dynamic other) {
-    if (other is! OffsetBase)
-      return false;
-    final OffsetBase typedOther = other;
-    return _dx == typedOther._dx &&
-           _dy == typedOther._dy;
+    return other is OffsetBase
+        && other._dx == _dx
+        && other._dy == _dy;
   }
 
   @override
@@ -327,11 +330,9 @@ class Offset extends OffsetBase {
   /// Compares two Offsets for equality.
   @override
   bool operator ==(dynamic other) {
-    if (other is! Offset)
-      return false;
-    final Offset typedOther = other;
-    return dx == typedOther.dx &&
-           dy == typedOther.dy;
+    return other is Offset
+        && other.dx == dx
+        && other.dy == dy;
   }
 
   @override
@@ -356,7 +357,7 @@ class Size extends OffsetBase {
   ///
   /// See also:
   ///
-  ///  * [new Size.fromRadius], which is more convenient when the available size
+  ///  * [Size.fromRadius], which is more convenient when the available size
   ///    is the radius of a circle.
   const Size.square(double dimension) : super(dimension, dimension);
 
@@ -373,7 +374,7 @@ class Size extends OffsetBase {
   ///
   /// See also:
   ///
-  ///  * [new Size.square], which creates a square with the given dimension.
+  ///  * [Size.square], which creates a square with the given dimension.
   const Size.fromRadius(double radius) : super(radius * 2.0, radius * 2.0);
 
   /// The horizontal extent of this size.
@@ -595,11 +596,9 @@ class Size extends OffsetBase {
   // We don't compare the runtimeType because of _DebugSize in the framework.
   @override
   bool operator ==(dynamic other) {
-    if (other is! Size)
-      return false;
-    final Size typedOther = other;
-    return _dx == typedOther._dx &&
-           _dy == typedOther._dy;
+    return other is Size
+        && other._dx == _dx
+        && other._dy == _dy;
   }
 
   @override
@@ -621,11 +620,15 @@ class Size extends OffsetBase {
 class Rect {
   /// Construct a rectangle from its left, top, right, and bottom edges.
   @pragma('vm:entry-point')
-  const Rect.fromLTRB(this.left, this.top, this.right, this.bottom)
-    : assert(left != null),
-      assert(top != null),
-      assert(right != null),
-      assert(bottom != null);
+      const Rect.fromLTRB(double left, double top, double right, double bottom)
+          : left = left ?? 0.0,
+            right = right ?? 0.0,
+            top = top ?? 0.0,
+            bottom = bottom ?? 0.0,
+            assert(left != null),
+            assert(top != null),
+            assert(right != null),
+            assert(bottom != null);
 
   /// Construct a rectangle from its left and top edges, its width, and its
   /// height.
@@ -877,11 +880,11 @@ class Rect {
       return true;
     if (runtimeType != other.runtimeType)
       return false;
-    final Rect typedOther = other;
-    return left   == typedOther.left   &&
-           top    == typedOther.top    &&
-           right  == typedOther.right  &&
-           bottom == typedOther.bottom;
+    return other is Rect
+        && other.left   == left
+        && other.top    == top
+        && other.right  == right
+        && other.bottom == bottom;
   }
 
   @override
@@ -999,8 +1002,10 @@ class Radius {
       return true;
     if (runtimeType != other.runtimeType)
       return false;
-    final Radius typedOther = other;
-    return typedOther.x == x && typedOther.y == y;
+
+    return other is Radius
+        && other.x == x
+        && other.y == y;
   }
 
   @override
@@ -1416,12 +1421,16 @@ class RRect {
     return min;
   }
 
-  // Scales all radii so that on each side their sum will not pass the size of
-  // the width/height.
-  //
-  // Inspired from:
-  //   https://github.com/google/skia/blob/master/src/core/SkRRect.cpp#L164
-  RRect _scaleRadii() {
+  /// Scales all radii so that on each side their sum will not exceed the size
+  /// of the width/height.
+  ///
+  /// Skia already handles RRects with radii that are too large in this way.
+  /// Therefore, this method is only needed for RRect use cases that require
+  /// the appropriately scaled radii values.
+  ///
+  /// See the [Skia scaling implementation](https://github.com/google/skia/blob/master/src/core/SkRRect.cpp)
+  /// for more details.
+  RRect scaleRadii() {
     double scale = 1.0;
     scale = _getMin(scale, blRadiusY, tlRadiusY, height);
     scale = _getMin(scale, tlRadiusX, trRadiusX, width);
@@ -1472,7 +1481,7 @@ class RRect {
     if (point.dx < left || point.dx >= right || point.dy < top || point.dy >= bottom)
       return false; // outside bounding box
 
-    final RRect scaled = _scaleRadii();
+    final RRect scaled = scaleRadii();
 
     double x;
     double y;
@@ -1590,19 +1599,19 @@ class RRect {
       return true;
     if (runtimeType != other.runtimeType)
       return false;
-    final RRect typedOther = other;
-    return left      == typedOther.left      &&
-           top       == typedOther.top       &&
-           right     == typedOther.right     &&
-           bottom    == typedOther.bottom    &&
-           tlRadiusX == typedOther.tlRadiusX &&
-           tlRadiusY == typedOther.tlRadiusY &&
-           trRadiusX == typedOther.trRadiusX &&
-           trRadiusY == typedOther.trRadiusY &&
-           blRadiusX == typedOther.blRadiusX &&
-           blRadiusY == typedOther.blRadiusY &&
-           brRadiusX == typedOther.brRadiusX &&
-           brRadiusY == typedOther.brRadiusY;
+    return other is RRect
+        && other.left      == left
+        && other.top       == top
+        && other.right     == right
+        && other.bottom    == bottom
+        && other.tlRadiusX == tlRadiusX
+        && other.tlRadiusY == tlRadiusY
+        && other.trRadiusX == trRadiusX
+        && other.trRadiusY == trRadiusY
+        && other.blRadiusX == blRadiusX
+        && other.blRadiusY == blRadiusY
+        && other.brRadiusX == brRadiusX
+        && other.brRadiusY == brRadiusY;
   }
 
   @override
@@ -1658,7 +1667,7 @@ class RSTransform {
   /// argument multiplied by the x-coordinate of the rotation point, minus the
   /// `scos` argument multiplied by the y-coordinate of the rotation point.
   ///
-  /// The [new RSTransform.fromComponents] method may be a simpler way to
+  /// The [RSTransform.fromComponents] method may be a simpler way to
   /// construct these values. However, if there is a way to factor out the
   /// computations of the sine and cosine of the rotation so that they can be
   /// reused over multiple calls to this constructor, it may be more efficient

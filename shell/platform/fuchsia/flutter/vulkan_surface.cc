@@ -32,13 +32,18 @@ bool CreateVulkanImage(vulkan::VulkanProvider& vulkan_provider,
   FML_DCHECK(out_vulkan_image != nullptr);
 
   // The image creation parameters need to be the same as those in scenic
-  // (garnet/lib/ui/gfx/resources/gpu_image.cc and
-  // garnet/public/lib/escher/util/image_utils.cc) or else the different vulkan
+  // (src/ui/scenic/lib/gfx/resources/gpu_image.cc and
+  // src/ui/lib/escher/util/image_utils.cc) or else the different vulkan
   // devices may interpret the bytes differently.
   // TODO(SCN-1369): Use API to coordinate this with scenic.
+  out_vulkan_image->vk_external_image_create_info = {
+      .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+      .pNext = nullptr,
+      .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_TEMP_ZIRCON_VMO_BIT_FUCHSIA,
+  };
   out_vulkan_image->vk_image_create_info = {
       .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-      .pNext = nullptr,
+      .pNext = &out_vulkan_image->vk_external_image_create_info,
       .flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT,
       .imageType = VK_IMAGE_TYPE_2D,
       .format = VK_FORMAT_B8G8R8A8_UNORM,
@@ -68,7 +73,7 @@ bool CreateVulkanImage(vulkan::VulkanProvider& vulkan_provider,
     }
 
     out_vulkan_image->vk_image = {
-        vk_image, [& vulkan_provider = vulkan_provider](VkImage image) {
+        vk_image, [&vulkan_provider = vulkan_provider](VkImage image) {
           vulkan_provider.vk().DestroyImage(vulkan_provider.vk_device(), image,
                                             NULL);
         }};
@@ -230,9 +235,14 @@ bool VulkanSurface::AllocateDeviceMemory(sk_sp<GrContext> context,
     }
   }
 
+  VkMemoryDedicatedAllocateInfo dedicated_allocate_info = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+      .pNext = nullptr,
+      .image = vulkan_image_.vk_image,
+      .buffer = VK_NULL_HANDLE};
   VkExportMemoryAllocateInfoKHR export_allocate_info = {
       .sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO_KHR,
-      .pNext = nullptr,
+      .pNext = &dedicated_allocate_info,
       .handleTypes =
           VK_EXTERNAL_MEMORY_HANDLE_TYPE_TEMP_ZIRCON_VMO_BIT_FUCHSIA};
 
@@ -244,7 +254,8 @@ bool VulkanSurface::AllocateDeviceMemory(sk_sp<GrContext> context,
   };
 
   {
-    TRACE_EVENT0("flutter", "vkAllocateMemory");
+    TRACE_EVENT1("flutter", "vkAllocateMemory", "allocationSize",
+                 alloc_info.allocationSize);
     VkDeviceMemory vk_memory = VK_NULL_HANDLE;
     if (VK_CALL_LOG_ERROR(vulkan_provider_.vk().AllocateMemory(
             vulkan_provider_.vk_device(), &alloc_info, NULL, &vk_memory)) !=
@@ -252,8 +263,8 @@ bool VulkanSurface::AllocateDeviceMemory(sk_sp<GrContext> context,
       return false;
     }
 
-    vk_memory_ = {vk_memory, [& vulkan_provider =
-                                  vulkan_provider_](VkDeviceMemory memory) {
+    vk_memory_ = {vk_memory,
+                  [&vulkan_provider = vulkan_provider_](VkDeviceMemory memory) {
                     vulkan_provider.vk().FreeMemory(vulkan_provider.vk_device(),
                                                     memory, NULL);
                   }};
@@ -441,7 +452,7 @@ bool VulkanSurface::FlushSessionAcquireAndReleaseEvents() {
 }
 
 void VulkanSurface::SignalWritesFinished(
-    std::function<void(void)> on_writes_committed) {
+    const std::function<void(void)>& on_writes_committed) {
   FML_DCHECK(on_writes_committed);
 
   if (!valid_) {

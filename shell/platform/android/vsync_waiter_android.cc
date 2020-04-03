@@ -8,10 +8,10 @@
 #include <utility>
 
 #include "flutter/common/task_runners.h"
-#include "flutter/fml/arraysize.h"
 #include "flutter/fml/logging.h"
 #include "flutter/fml/platform/android/jni_util.h"
 #include "flutter/fml/platform/android/scoped_java_ref.h"
+#include "flutter/fml/size.h"
 #include "flutter/fml/trace_event.h"
 
 namespace flutter {
@@ -57,6 +57,8 @@ void VsyncWaiterAndroid::OnNativeVsync(JNIEnv* env,
                                        jlong frameTimeNanos,
                                        jlong frameTargetTimeNanos,
                                        jlong java_baton) {
+  TRACE_EVENT0("flutter", "VSYNC");
+
   auto frame_time = fml::TimePoint::FromEpochDelta(
       fml::TimeDelta::FromNanoseconds(frameTimeNanos));
   auto target_time = fml::TimePoint::FromEpochDelta(
@@ -87,7 +89,7 @@ bool VsyncWaiterAndroid::Register(JNIEnv* env) {
       .fnPtr = reinterpret_cast<void*>(&OnNativeVsync),
   }};
 
-  jclass clazz = env->FindClass("io/flutter/view/VsyncWaiter");
+  jclass clazz = env->FindClass("io/flutter/embedding/engine/FlutterJNI");
 
   if (clazz == nullptr) {
     return false;
@@ -102,7 +104,7 @@ bool VsyncWaiterAndroid::Register(JNIEnv* env) {
 
   FML_CHECK(g_async_wait_for_vsync_method_ != nullptr);
 
-  return env->RegisterNatives(clazz, methods, arraysize(methods)) == 0;
+  return env->RegisterNatives(clazz, methods, fml::size(methods)) == 0;
 }
 
 }  // namespace flutter

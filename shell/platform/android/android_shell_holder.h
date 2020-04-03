@@ -11,6 +11,7 @@
 #include "flutter/fml/platform/android/jni_weak_ref.h"
 #include "flutter/fml/unique_fd.h"
 #include "flutter/lib/ui/window/viewport_metrics.h"
+#include "flutter/runtime/window_data.h"
 #include "flutter/shell/common/run_configuration.h"
 #include "flutter/shell/common/shell.h"
 #include "flutter/shell/common/thread_host.h"
@@ -30,11 +31,6 @@ class AndroidShellHolder {
 
   void Launch(RunConfiguration configuration);
 
-  void SetViewportMetrics(const flutter::ViewportMetrics& metrics);
-
-  void DispatchPointerDataPacket(
-      std::unique_ptr<flutter::PointerDataPacket> packet);
-
   const flutter::Settings& GetSettings() const;
 
   fml::WeakPtr<PlatformViewAndroid> GetPlatformView();
@@ -52,7 +48,7 @@ class AndroidShellHolder {
   std::unique_ptr<Shell> shell_;
   bool is_valid_ = false;
   pthread_key_t thread_destruct_key_;
-  uint64_t next_pointer_flow_id_;
+  uint64_t next_pointer_flow_id_ = 0;
 
   static void ThreadDestructCallback(void* value);
 

@@ -15,7 +15,7 @@
 #include "dart-pkg/zircon/sdk_ext/handle.h"
 #include "dart-pkg/zircon/sdk_ext/natives.h"
 #include "dart-pkg/zircon/sdk_ext/system.h"
-#include "flutter/fml/arraysize.h"
+#include "flutter/fml/size.h"
 #include "third_party/dart/runtime/include/dart_api.h"
 #include "third_party/tonic/dart_binding_macros.h"
 #include "third_party/tonic/dart_class_library.h"
@@ -23,7 +23,7 @@
 #include "third_party/tonic/dart_library_natives.h"
 #include "third_party/tonic/dart_state.h"
 #include "third_party/tonic/logging/dart_invoke.h"
-#include "third_party/tonic/typed_data/uint8_list.h"
+#include "third_party/tonic/typed_data/typed_list.h"
 
 using tonic::ToDart;
 
@@ -64,7 +64,7 @@ Dart_NativeFunction NativeLookup(Dart_Handle name,
   FML_DCHECK(function_name != nullptr);
   FML_DCHECK(auto_setup_scope != nullptr);
   *auto_setup_scope = true;
-  size_t num_entries = arraysize(Entries);
+  size_t num_entries = fml::size(Entries);
   for (size_t i = 0; i < num_entries; ++i) {
     const struct NativeEntries& entry = Entries[i];
     if (!strcmp(function_name, entry.name) &&
@@ -78,7 +78,7 @@ Dart_NativeFunction NativeLookup(Dart_Handle name,
 }
 
 const uint8_t* NativeSymbol(Dart_NativeFunction native_function) {
-  size_t num_entries = arraysize(Entries);
+  size_t num_entries = fml::size(Entries);
   for (size_t i = 0; i < num_entries; ++i) {
     const struct NativeEntries& entry = Entries[i];
     if (entry.function == native_function) {
@@ -102,7 +102,8 @@ void SetReturnCode(Dart_NativeArguments arguments) {
 }  // namespace
 
 void Initialize(fidl::InterfaceHandle<fuchsia::sys::Environment> environment,
-                zx::channel directory_request) {
+                zx::channel directory_request,
+                std::optional<zx::eventpair> view_ref) {
   zircon::dart::Initialize();
 
   Dart_Handle library = Dart_LookupLibrary(ToDart("dart:fuchsia"));
@@ -126,6 +127,13 @@ void Initialize(fidl::InterfaceHandle<fuchsia::sys::Environment> environment,
     result = Dart_SetField(
         library, ToDart("_outgoingServices"),
         ToDart(zircon::dart::Handle::Create(std::move(directory_request))));
+    FML_CHECK(!tonic::LogIfError(result));
+  }
+
+  if (view_ref) {
+    result = Dart_SetField(
+        library, ToDart("_viewRef"),
+        ToDart(zircon::dart::Handle::Create((*view_ref).release())));
     FML_CHECK(!tonic::LogIfError(result));
   }
 }

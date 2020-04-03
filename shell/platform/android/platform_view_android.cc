@@ -48,7 +48,7 @@ void PlatformViewAndroid::NotifyCreated(
 
     fml::AutoResetWaitableEvent latch;
     fml::TaskRunner::RunNowOrPostTask(
-        task_runners_.GetGPUTaskRunner(),
+        task_runners_.GetRasterTaskRunner(),
         [&latch, surface = android_surface_.get(),
          native_window = std::move(native_window)]() {
           surface->SetNativeWindow(native_window);
@@ -66,7 +66,7 @@ void PlatformViewAndroid::NotifyDestroyed() {
   if (android_surface_) {
     fml::AutoResetWaitableEvent latch;
     fml::TaskRunner::RunNowOrPostTask(
-        task_runners_.GetGPUTaskRunner(),
+        task_runners_.GetRasterTaskRunner(),
         [&latch, surface = android_surface_.get()]() {
           surface->TeardownOnScreenContext();
           latch.Signal();
@@ -81,7 +81,7 @@ void PlatformViewAndroid::NotifyChanged(const SkISize& size) {
   }
   fml::AutoResetWaitableEvent latch;
   fml::TaskRunner::RunNowOrPostTask(
-      task_runners_.GetGPUTaskRunner(),  //
+      task_runners_.GetRasterTaskRunner(),  //
       [&latch, surface = android_surface_.get(), size]() {
         surface->OnScreenSurfaceResize(size);
         latch.Signal();
@@ -227,7 +227,7 @@ void PlatformViewAndroid::DispatchSemanticsAction(JNIEnv* env,
 void PlatformViewAndroid::UpdateSemantics(
     flutter::SemanticsNodeUpdates update,
     flutter::CustomAccessibilityActionUpdates actions) {
-  constexpr size_t kBytesPerNode = 39 * sizeof(int32_t);
+  constexpr size_t kBytesPerNode = 41 * sizeof(int32_t);
   constexpr size_t kBytesPerChild = sizeof(int32_t);
   constexpr size_t kBytesPerAction = 4 * sizeof(int32_t);
 
@@ -261,6 +261,8 @@ void PlatformViewAndroid::UpdateSemantics(
       buffer_int32[position++] = node.id;
       buffer_int32[position++] = node.flags;
       buffer_int32[position++] = node.actions;
+      buffer_int32[position++] = node.maxValueLength;
+      buffer_int32[position++] = node.currentValueLength;
       buffer_int32[position++] = node.textSelectionBase;
       buffer_int32[position++] = node.textSelectionExtent;
       buffer_int32[position++] = node.platformViewId;
