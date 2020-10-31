@@ -8,9 +8,14 @@ import 'dart:html' as html;
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart';
 
+import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 
 void main() {
+  internalBootstrapBrowserTest(() => testMain);
+}
+
+void testMain() {
   group('Surface', () {
     setUp(() {
       SurfaceSceneBuilder.debugForgetFrameScene();
@@ -63,7 +68,7 @@ void main() {
       final SceneBuilder builder1 = SceneBuilder();
       final PersistedOpacity opacityLayer = builder1.pushOpacity(100);
       final PersistedTransform transformLayer =
-          builder1.pushTransform(Matrix4.identity().storage);
+          builder1.pushTransform(Matrix4.identity().toFloat64());
       builder1.pop();
       builder1.pop();
       builder1.build();
@@ -154,10 +159,10 @@ void main() {
       final _LoggingTestSurface logger = _LoggingTestSurface();
       final SurfaceSceneBuilder builder1 = SurfaceSceneBuilder();
       final PersistedTransform a1 =
-          builder1.pushTransform(Matrix4.identity().storage);
+          builder1.pushTransform(Matrix4.identity().toFloat64());
       final PersistedOpacity b1 = builder1.pushOpacity(100);
       final PersistedTransform c1 =
-          builder1.pushTransform(Matrix4.identity().storage);
+          builder1.pushTransform(Matrix4.identity().toFloat64());
       builder1.debugAddSurface(logger);
       builder1.pop();
       builder1.pop();
@@ -174,9 +179,9 @@ void main() {
 
       final SurfaceSceneBuilder builder2 = SurfaceSceneBuilder();
       final PersistedTransform a2 =
-          builder2.pushTransform(Matrix4.identity().storage, oldLayer: a1);
+          builder2.pushTransform(Matrix4.identity().toFloat64(), oldLayer: a1);
       final PersistedTransform c2 =
-          builder2.pushTransform(Matrix4.identity().storage, oldLayer: c1);
+          builder2.pushTransform(Matrix4.identity().toFloat64(), oldLayer: c1);
       builder2.addRetained(logger);
       builder2.pop();
       builder2.pop();
@@ -194,7 +199,11 @@ void main() {
 
       expect(elementC.parent, elementA);
       expect(elementB.parent, null);
-    });
+    },
+        // This method failed on iOS Safari.
+        // TODO: https://github.com/flutter/flutter/issues/60036
+        skip: (browserEngine == BrowserEngine.webkit &&
+            operatingSystem == OperatingSystem.iOs));
 
     test('is retained', () {
       final SceneBuilder builder1 = SceneBuilder();
@@ -245,7 +254,7 @@ void main() {
       final SceneBuilder builder1 = SceneBuilder();
       final PersistedOpacity opacityLayer = builder1.pushOpacity(100);
       final PersistedTransform transformLayer =
-          builder1.pushTransform(Matrix4.identity().storage);
+          builder1.pushTransform(Matrix4.identity().toFloat64());
       builder1.pop();
       builder1.pop();
       builder1.build();
@@ -349,6 +358,22 @@ void main() {
       expect(opacityLayer2.isActive, true);
       expect(
           opacityLayer2.rootElement, element); // adopts old surface's element
+    });
+
+    // Regression test for https://github.com/flutter/flutter/issues/60461
+    //
+    // During retained match many to many, build can be called on existing
+    // PersistedPhysicalShape multiple times when not matched.
+    test('Can call apply multiple times on existing PersistedPhysicalShape'
+        'when using arbitrary path',
+            () {
+      final SceneBuilder builder1 = SceneBuilder();
+      final Path path = Path();
+      path.addPolygon([Offset(50, 0), Offset(100, 80), Offset(20, 40)], true);
+      PersistedPhysicalShape shape = builder1.pushPhysicalShape(path: path,
+        color: Color(0xFF00FF00), elevation: 1);
+      builder1.build();
+      expect(() => shape.apply(), returnsNormally);
     });
   });
 }

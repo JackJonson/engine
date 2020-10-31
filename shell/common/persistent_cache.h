@@ -9,10 +9,15 @@
 #include <mutex>
 #include <set>
 
+#include "flutter/assets/asset_manager.h"
 #include "flutter/fml/macros.h"
 #include "flutter/fml/task_runner.h"
 #include "flutter/fml/unique_fd.h"
 #include "third_party/skia/include/gpu/GrContextOptions.h"
+
+namespace testing {
+class ShellTest;
+}
 
 namespace flutter {
 
@@ -57,6 +62,10 @@ class PersistentCache : public GrContextOptions::PersistentCache {
   bool IsDumpingSkp() const { return is_dumping_skp_; }
   void SetIsDumpingSkp(bool value) { is_dumping_skp_ = value; }
 
+  // Remove all files inside the persistent cache directory.
+  // Return whether the purge is successful.
+  bool Purge();
+
   // |GrContextOptions::PersistentCache|
   sk_sp<SkData> load(const SkData& key) override;
 
@@ -65,12 +74,21 @@ class PersistentCache : public GrContextOptions::PersistentCache {
   /// Load all the SkSL shader caches in the right directory.
   std::vector<SkSLCache> LoadSkSLs();
 
+  /// Set the asset manager from which PersistentCache can load SkLSs. A nullptr
+  /// can be provided to clear the asset manager.
+  static void SetAssetManager(std::shared_ptr<AssetManager> value);
+
   static bool cache_sksl() { return cache_sksl_; }
   static void SetCacheSkSL(bool value);
   static void MarkStrategySet() { strategy_set_ = true; }
 
+  static constexpr char kSkSLSubdirName[] = "sksl";
+  static constexpr char kAssetFileName[] = "io.flutter.shaders.json";
+
  private:
   static std::string cache_base_path_;
+
+  static std::shared_ptr<AssetManager> asset_manager_;
 
   static std::mutex instance_mutex_;
   static std::unique_ptr<PersistentCache> gPersistentCache;
@@ -105,6 +123,8 @@ class PersistentCache : public GrContextOptions::PersistentCache {
   void store(const SkData& key, const SkData& data) override;
 
   fml::RefPtr<fml::TaskRunner> GetWorkerTaskRunner() const;
+
+  friend class testing::ShellTest;
 
   FML_DISALLOW_COPY_AND_ASSIGN(PersistentCache);
 };

@@ -6,14 +6,18 @@
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' as ui;
 
+import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 
 import 'mock_engine_canvas.dart';
 
 void main() {
+  internalBootstrapBrowserTest(() => testMain);
+}
+
+void testMain() {
   setUpAll(() {
     WebExperiments.ensureInitialized();
-    Profiler.ensureInitialized();
   });
 
   group('EngineCanvas', () {
@@ -27,7 +31,6 @@ void main() {
       test(description, () {
         testFn(BitmapCanvas(canvasSize));
         testFn(DomCanvas());
-        testFn(HoudiniCanvas(canvasSize));
         testFn(mockCanvas = MockEngineCanvas());
         if (whenDone != null) {
           whenDone();
@@ -36,16 +39,17 @@ void main() {
     }
 
     testCanvas('draws laid out paragraph', (EngineCanvas canvas) {
-      final RecordingCanvas recordingCanvas =
-          RecordingCanvas(const ui.Rect.fromLTWH(0, 0, 100, 100));
+      final ui.Rect screenRect = const ui.Rect.fromLTWH(0, 0, 100, 100);
+      final RecordingCanvas recordingCanvas = RecordingCanvas(screenRect);
       final ui.ParagraphBuilder builder =
           ui.ParagraphBuilder(ui.ParagraphStyle());
       builder.addText('sample');
       paragraph = builder.build();
       paragraph.layout(const ui.ParagraphConstraints(width: 100));
       recordingCanvas.drawParagraph(paragraph, const ui.Offset(10, 10));
+      recordingCanvas.endRecording();
       canvas.clear();
-      recordingCanvas.apply(canvas);
+      recordingCanvas.apply(canvas, screenRect);
     }, whenDone: () {
       expect(mockCanvas.methodCallLog, hasLength(3));
 
@@ -60,15 +64,16 @@ void main() {
 
     testCanvas('ignores paragraphs that were not laid out',
         (EngineCanvas canvas) {
-      final RecordingCanvas recordingCanvas =
-          RecordingCanvas(const ui.Rect.fromLTWH(0, 0, 100, 100));
+      final ui.Rect screenRect = const ui.Rect.fromLTWH(0, 0, 100, 100);
+      final RecordingCanvas recordingCanvas = RecordingCanvas(screenRect);
       final ui.ParagraphBuilder builder =
           ui.ParagraphBuilder(ui.ParagraphStyle());
       builder.addText('sample');
       final ui.Paragraph paragraph = builder.build();
       recordingCanvas.drawParagraph(paragraph, const ui.Offset(10, 10));
+      recordingCanvas.endRecording();
       canvas.clear();
-      recordingCanvas.apply(canvas);
+      recordingCanvas.apply(canvas, screenRect);
     }, whenDone: () {
       expect(mockCanvas.methodCallLog, hasLength(2));
       expect(mockCanvas.methodCallLog[0].methodName, 'clear');

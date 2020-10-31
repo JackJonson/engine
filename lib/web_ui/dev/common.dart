@@ -18,24 +18,6 @@ const int kMaxScreenshotWidth = 1024;
 const int kMaxScreenshotHeight = 1024;
 const double kMaxDiffRateFailure = 0.28 / 100; // 0.28%
 
-class BrowserInstallerException implements Exception {
-  BrowserInstallerException(this.message);
-
-  final String message;
-
-  @override
-  String toString() => message;
-}
-
-class DriverException implements Exception {
-  DriverException(this.message);
-
-  final String message;
-
-  @override
-  String toString() => message;
-}
-
 abstract class PlatformBinding {
   static PlatformBinding get instance {
     if (_instance == null) {
@@ -77,11 +59,11 @@ class _WindowsBinding implements PlatformBinding {
 
   @override
   String getChromeDownloadUrl(String version) =>
-      'https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Win%2F${version}%2Fchrome-win32.zip?alt=media';
+      'https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Win%2F${version}%2Fchrome-win.zip?alt=media';
 
   @override
   String getChromeExecutablePath(io.Directory versionDir) =>
-      path.join(versionDir.path, 'chrome-win32', 'chrome');
+      path.join(versionDir.path, 'chrome-win', 'chrome.exe');
 
   @override
   String getFirefoxDownloadUrl(String version) =>
@@ -249,15 +231,12 @@ class DevNull implements StringSink {
   void writeln([Object obj = ""]) {}
 }
 
+/// Whether the felt command is running on Cirrus CI.
 bool get isCirrus => io.Platform.environment['CIRRUS_CI'] == 'true';
 
-/// There might be proccesses started during the tests.
-///
-/// Use this list to store those Processes, for cleaning up before shutdown.
-final List<io.Process> processesToCleanUp = List<io.Process>();
+/// Whether the felt command is running on LUCI.
+bool get isLuci => io.Platform.environment['LUCI_CONTEXT'] != null;
 
-/// There might be temporary directories created during the tests.
-///
-/// Use this list to store those directories and for deleteing them before
-/// shutdown.
-final List<io.Directory> temporaryDirectories = List<io.Directory>();
+/// Whether the felt command is running on one of the Continuous Integration
+/// environements.
+bool get isCi => isCirrus || isLuci;

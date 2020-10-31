@@ -17,6 +17,7 @@
 #include "flutter/runtime/dart_service_isolate.h"
 #include "flutter/runtime/dart_vm.h"
 #include "flutter/runtime/dart_vm_lifecycle.h"
+#include "flutter/runtime/isolate_configuration.h"
 #include "third_party/dart/runtime/include/dart_api.h"
 #include "third_party/dart/runtime/include/dart_tools_api.h"
 #include "third_party/tonic/converter/dart_converter.h"
@@ -43,7 +44,7 @@ class DartErrorString {
   }
   char** error() { return &str_; }
   const char* str() const { return str_; }
-  operator bool() const { return str_ != nullptr; }
+  explicit operator bool() const { return str_ != nullptr; }
 
  private:
   FML_DISALLOW_COPY_AND_ASSIGN(DartErrorString);
@@ -52,18 +53,139 @@ class DartErrorString {
 
 }  // anonymous namespace
 
+DartIsolate::Flags::Flags() : Flags(nullptr) {}
+
+DartIsolate::Flags::Flags(const Dart_IsolateFlags* flags) {
+  if (flags) {
+    flags_ = *flags;
+  } else {
+    ::Dart_IsolateFlagsInitialize(&flags_);
+  }
+}
+
+DartIsolate::Flags::~Flags() = default;
+
+void DartIsolate::Flags::SetNullSafetyEnabled(bool enabled) {
+  flags_.null_safety = enabled;
+}
+
+Dart_IsolateFlags DartIsolate::Flags::Get() const {
+  return flags_;
+}
+
+std::weak_ptr<DartIsolate> DartIsolate::CreateRunningRootIsolate(
+    const Settings& settings,
+    fml::RefPtr<const DartSnapshot> isolate_snapshot,
+    TaskRunners task_runners,
+    std::unique_ptr<PlatformConfiguration> platform_configuration,
+    fml::WeakPtr<SnapshotDelegate> snapshot_delegate,
+    fml::WeakPtr<HintFreedDelegate> hint_freed_delegate,
+    fml::WeakPtr<IOManager> io_manager,
+    fml::RefPtr<SkiaUnrefQueue> skia_unref_queue,
+    fml::WeakPtr<ImageDecoder> image_decoder,
+    std::string advisory_script_uri,
+    std::string advisory_script_entrypoint,
+    Flags isolate_flags,
+    const fml::closure& isolate_create_callback,
+    const fml::closure& isolate_shutdown_callback,
+    std::optional<std::string> dart_entrypoint,
+    std::optional<std::string> dart_entrypoint_library,
+    std::unique_ptr<IsolateConfiguration> isolate_configration) {
+  if (!isolate_snapshot) {
+    FML_LOG(ERROR) << "Invalid isolate snapshot.";
+    return {};
+  }
+
+  if (!isolate_configration) {
+    FML_LOG(ERROR) << "Invalid isolate configuration.";
+    return {};
+  }
+
+  isolate_flags.SetNullSafetyEnabled(
+      isolate_configration->IsNullSafetyEnabled(*isolate_snapshot));
+
+  auto isolate = CreateRootIsolate(settings,                           //
+                                   isolate_snapshot,                   //
+                                   task_runners,                       //
+                                   std::move(platform_configuration),  //
+                                   snapshot_delegate,                  //
+                                   hint_freed_delegate,                //
+                                   io_manager,                         //
+                                   skia_unref_queue,                   //
+                                   image_decoder,                      //
+                                   advisory_script_uri,                //
+                                   advisory_script_entrypoint,         //
+                                   isolate_flags,                      //
+                                   isolate_create_callback,            //
+                                   isolate_shutdown_callback           //
+                                   )
+                     .lock();
+
+  if (!isolate) {
+    FML_LOG(ERROR) << "Could not create root isolate.";
+    return {};
+  }
+
+  fml::ScopedCleanupClosure shutdown_on_error([isolate]() {
+    if (!isolate->Shutdown()) {
+      FML_DLOG(ERROR) << "Could not shutdown transient isolate.";
+    }
+  });
+
+  if (isolate->GetPhase() != DartIsolate::Phase::LibrariesSetup) {
+    FML_LOG(ERROR) << "Root isolate was created in an incorrect phase.";
+    return {};
+  }
+
+  if (!isolate_configration->PrepareIsolate(*isolate.get())) {
+    FML_LOG(ERROR) << "Could not prepare isolate.";
+    return {};
+  }
+
+  if (isolate->GetPhase() != DartIsolate::Phase::Ready) {
+    FML_LOG(ERROR) << "Root isolate not in the ready phase for Dart entrypoint "
+                      "invocation.";
+    return {};
+  }
+
+  if (settings.root_isolate_create_callback) {
+    // Isolate callbacks always occur in isolate scope and before user code has
+    // had a chance to run.
+    tonic::DartState::Scope scope(isolate.get());
+    settings.root_isolate_create_callback(*isolate.get());
+  }
+
+  if (!isolate->RunFromLibrary(dart_entrypoint_library,       //
+                               dart_entrypoint,               //
+                               settings.dart_entrypoint_args  //
+                               )) {
+    FML_LOG(ERROR) << "Could not run the run main Dart entrypoint.";
+    return {};
+  }
+
+  if (settings.root_isolate_shutdown_callback) {
+    isolate->AddIsolateShutdownCallback(
+        settings.root_isolate_shutdown_callback);
+  }
+
+  shutdown_on_error.Release();
+
+  return isolate;
+}
+
 std::weak_ptr<DartIsolate> DartIsolate::CreateRootIsolate(
     const Settings& settings,
     fml::RefPtr<const DartSnapshot> isolate_snapshot,
     TaskRunners task_runners,
-    std::unique_ptr<Window> window,
+    std::unique_ptr<PlatformConfiguration> platform_configuration,
     fml::WeakPtr<SnapshotDelegate> snapshot_delegate,
+    fml::WeakPtr<HintFreedDelegate> hint_freed_delegate,
     fml::WeakPtr<IOManager> io_manager,
     fml::RefPtr<SkiaUnrefQueue> unref_queue,
     fml::WeakPtr<ImageDecoder> image_decoder,
     std::string advisory_script_uri,
     std::string advisory_script_entrypoint,
-    Dart_IsolateFlags* flags,
+    Flags flags,
     const fml::closure& isolate_create_callback,
     const fml::closure& isolate_shutdown_callback) {
   TRACE_EVENT0("flutter", "DartIsolate::CreateRootIsolate");
@@ -84,21 +206,23 @@ std::weak_ptr<DartIsolate> DartIsolate::CreateRootIsolate(
 
   auto isolate_data = std::make_unique<std::shared_ptr<DartIsolate>>(
       std::shared_ptr<DartIsolate>(new DartIsolate(
-          settings,                      // settings
-          task_runners,                  // task runners
-          std::move(snapshot_delegate),  // snapshot delegate
-          std::move(io_manager),         // IO manager
-          std::move(unref_queue),        // Skia unref queue
-          std::move(image_decoder),      // Image Decoder
-          advisory_script_uri,           // advisory URI
-          advisory_script_entrypoint,    // advisory entrypoint
-          true                           // is_root_isolate
+          settings,                        // settings
+          task_runners,                    // task runners
+          std::move(snapshot_delegate),    // snapshot delegate
+          std::move(hint_freed_delegate),  // hint freed delegate
+          std::move(io_manager),           // IO manager
+          std::move(unref_queue),          // Skia unref queue
+          std::move(image_decoder),        // Image Decoder
+          advisory_script_uri,             // advisory URI
+          advisory_script_entrypoint,      // advisory entrypoint
+          true                             // is_root_isolate
           )));
 
   DartErrorString error;
-  Dart_Isolate vm_isolate =
-      CreateDartIsolateGroup(std::move(isolate_group_data),
-                             std::move(isolate_data), flags, error.error());
+  auto isolate_flags = flags.Get();
+  Dart_Isolate vm_isolate = CreateDartIsolateGroup(
+      std::move(isolate_group_data), std::move(isolate_data), &isolate_flags,
+      error.error());
 
   if (error) {
     FML_LOG(ERROR) << "CreateDartIsolateGroup failed: " << error.str();
@@ -111,7 +235,8 @@ std::weak_ptr<DartIsolate> DartIsolate::CreateRootIsolate(
   std::shared_ptr<DartIsolate>* root_isolate_data =
       static_cast<std::shared_ptr<DartIsolate>*>(Dart_IsolateData(vm_isolate));
 
-  (*root_isolate_data)->SetWindow(std::move(window));
+  (*root_isolate_data)
+      ->SetPlatformConfiguration(std::move(platform_configuration));
 
   return (*root_isolate_data)->GetWeakIsolatePtr();
 }
@@ -119,6 +244,7 @@ std::weak_ptr<DartIsolate> DartIsolate::CreateRootIsolate(
 DartIsolate::DartIsolate(const Settings& settings,
                          TaskRunners task_runners,
                          fml::WeakPtr<SnapshotDelegate> snapshot_delegate,
+                         fml::WeakPtr<HintFreedDelegate> hint_freed_delegate,
                          fml::WeakPtr<IOManager> io_manager,
                          fml::RefPtr<SkiaUnrefQueue> unref_queue,
                          fml::WeakPtr<ImageDecoder> image_decoder,
@@ -129,6 +255,7 @@ DartIsolate::DartIsolate(const Settings& settings,
                   settings.task_observer_add,
                   settings.task_observer_remove,
                   std::move(snapshot_delegate),
+                  std::move(hint_freed_delegate),
                   std::move(io_manager),
                   std::move(unref_queue),
                   std::move(image_decoder),
@@ -136,8 +263,11 @@ DartIsolate::DartIsolate(const Settings& settings,
                   advisory_script_entrypoint,
                   settings.log_tag,
                   settings.unhandled_exception_callback,
-                  DartVMRef::GetIsolateNameServer()),
-      is_root_isolate_(is_root_isolate) {
+                  DartVMRef::GetIsolateNameServer(),
+                  is_root_isolate),
+      may_insecurely_connect_to_all_domains_(
+          settings.may_insecurely_connect_to_all_domains),
+      domain_network_policy_(settings.domain_network_policy) {
   phase_ = Phase::Uninitialized;
 }
 
@@ -261,9 +391,10 @@ bool DartIsolate::LoadLibraries() {
 
   tonic::DartState::Scope scope(this);
 
-  DartIO::InitForIsolate();
+  DartIO::InitForIsolate(may_insecurely_connect_to_all_domains_,
+                         domain_network_policy_);
 
-  DartUI::InitForIsolate(IsRootIsolate());
+  DartUI::InitForIsolate();
 
   const bool is_service_isolate = Dart_IsServiceIsolate(isolate());
 
@@ -382,7 +513,7 @@ bool DartIsolate::LoadKernel(std::shared_ptr<const fml::Mapping> mapping,
   if (GetIsolateGroupData().GetChildIsolatePreparer() == nullptr) {
     GetIsolateGroupData().SetChildIsolatePreparer(
         [buffers = kernel_buffers_](DartIsolate* isolate) {
-          for (unsigned long i = 0; i < buffers.size(); i++) {
+          for (uint64_t i = 0; i < buffers.size(); i++) {
             bool last_piece = i + 1 == buffers.size();
             const std::shared_ptr<const fml::Mapping>& buffer = buffers.at(i);
             if (!isolate->PrepareForRunningFromKernel(buffer, last_piece)) {
@@ -484,40 +615,9 @@ bool DartIsolate::MarkIsolateRunnable() {
   return true;
 }
 
-/// @note Procedure doesn't copy all closures.
-[[nodiscard]] bool DartIsolate::Run(const std::string& entrypoint_name,
-                                    const std::vector<std::string>& args,
-                                    const fml::closure& on_run) {
-  TRACE_EVENT0("flutter", "DartIsolate::Run");
-  if (phase_ != Phase::Ready) {
-    return false;
-  }
-
-  tonic::DartState::Scope scope(this);
-
-  auto user_entrypoint_function =
-      Dart_GetField(Dart_RootLibrary(), tonic::ToDart(entrypoint_name.c_str()));
-
-  auto entrypoint_args = tonic::ToDart(args);
-
-  if (!InvokeMainEntrypoint(user_entrypoint_function, entrypoint_args)) {
-    return false;
-  }
-
-  phase_ = Phase::Running;
-
-  if (on_run) {
-    on_run();
-  }
-  return true;
-}
-
-/// @note Procedure doesn't copy all closures.
-[[nodiscard]] bool DartIsolate::RunFromLibrary(
-    const std::string& library_name,
-    const std::string& entrypoint_name,
-    const std::vector<std::string>& args,
-    const fml::closure& on_run) {
+bool DartIsolate::RunFromLibrary(std::optional<std::string> library_name,
+                                 std::optional<std::string> entrypoint,
+                                 const std::vector<std::string>& args) {
   TRACE_EVENT0("flutter", "DartIsolate::RunFromLibrary");
   if (phase_ != Phase::Ready) {
     return false;
@@ -525,9 +625,15 @@ bool DartIsolate::MarkIsolateRunnable() {
 
   tonic::DartState::Scope scope(this);
 
+  auto library_handle =
+      library_name.has_value() && !library_name.value().empty()
+          ? ::Dart_LookupLibrary(tonic::ToDart(library_name.value().c_str()))
+          : ::Dart_RootLibrary();
+  auto entrypoint_handle = entrypoint.has_value() && !entrypoint.value().empty()
+                               ? tonic::ToDart(entrypoint.value().c_str())
+                               : tonic::ToDart("main");
   auto user_entrypoint_function =
-      Dart_GetField(Dart_LookupLibrary(tonic::ToDart(library_name.c_str())),
-                    tonic::ToDart(entrypoint_name.c_str()));
+      ::Dart_GetField(library_handle, entrypoint_handle);
 
   auto entrypoint_args = tonic::ToDart(args);
 
@@ -537,9 +643,6 @@ bool DartIsolate::MarkIsolateRunnable() {
 
   phase_ = Phase::Running;
 
-  if (on_run) {
-    on_run();
-  }
   return true;
 }
 
@@ -591,19 +694,28 @@ Dart_Isolate DartIsolate::DartCreateAndStartServiceIsolate(
 
   flags->load_vmservice_library = true;
 
+#if (FLUTTER_RUNTIME_MODE != FLUTTER_RUNTIME_MODE_DEBUG)
+  // TODO(68663): The service isolate in debug mode is always launched without
+  // sound null safety. Fix after the isolate snapshot data is created with the
+  // right flags.
+  flags->null_safety =
+      vm_data->GetIsolateSnapshot()->IsNullSafetyEnabled(nullptr);
+#endif
+
   std::weak_ptr<DartIsolate> weak_service_isolate =
       DartIsolate::CreateRootIsolate(
           vm_data->GetSettings(),         // settings
           vm_data->GetIsolateSnapshot(),  // isolate snapshot
           null_task_runners,              // task runners
-          nullptr,                        // window
+          nullptr,                        // platform_configuration
           {},                             // snapshot delegate
+          {},                             // Hint freed delegate
           {},                             // IO Manager
           {},                             // Skia unref queue
           {},                             // Image Decoder
           DART_VM_SERVICE_ISOLATE_NAME,   // script uri
           DART_VM_SERVICE_ISOLATE_NAME,   // script entrypoint
-          flags,                          // flags
+          DartIsolate::Flags{flags},      // flags
           nullptr,                        // isolate create callback
           nullptr                         // isolate shutdown callback
       );
@@ -629,6 +741,10 @@ Dart_Isolate DartIsolate::DartCreateAndStartServiceIsolate(
     // Error is populated by call to startup.
     FML_DLOG(ERROR) << *error;
     return nullptr;
+  }
+
+  if (auto callback = vm_data->GetSettings().service_isolate_create_callback) {
+    callback();
   }
 
   if (auto service_protocol = DartVMRef::GetServiceProtocol()) {
@@ -673,6 +789,10 @@ Dart_Isolate DartIsolate::DartIsolateGroupCreateCallback(
     );
   }
 
+  if (!parent_isolate_data) {
+    return nullptr;
+  }
+
   DartIsolateGroupData& parent_group_data =
       (*parent_isolate_data)->GetIsolateGroupData();
 
@@ -687,7 +807,8 @@ Dart_Isolate DartIsolate::DartIsolateGroupCreateCallback(
               parent_group_data.GetIsolateShutdownCallback())));
 
   TaskRunners null_task_runners(advisory_script_uri,
-                                /* platform= */ nullptr, /* raster= */ nullptr,
+                                /* platform= */ nullptr,
+                                /* raster= */ nullptr,
                                 /* ui= */ nullptr,
                                 /* io= */ nullptr);
 
@@ -696,6 +817,7 @@ Dart_Isolate DartIsolate::DartIsolateGroupCreateCallback(
           (*isolate_group_data)->GetSettings(),  // settings
           null_task_runners,                     // task_runners
           fml::WeakPtr<SnapshotDelegate>{},      // snapshot_delegate
+          fml::WeakPtr<HintFreedDelegate>{},     // hint_freed_delegate
           fml::WeakPtr<IOManager>{},             // io_manager
           fml::RefPtr<SkiaUnrefQueue>{},         // unref_queue
           fml::WeakPtr<ImageDecoder>{},          // image_decoder
@@ -729,7 +851,8 @@ bool DartIsolate::DartIsolateInitializeCallback(void** child_callback_data,
           Dart_CurrentIsolateGroupData());
 
   TaskRunners null_task_runners((*isolate_group_data)->GetAdvisoryScriptURI(),
-                                /* platform= */ nullptr, /* raster= */ nullptr,
+                                /* platform= */ nullptr,
+                                /* raster= */ nullptr,
                                 /* ui= */ nullptr,
                                 /* io= */ nullptr);
 
@@ -738,6 +861,7 @@ bool DartIsolate::DartIsolateInitializeCallback(void** child_callback_data,
           (*isolate_group_data)->GetSettings(),           // settings
           null_task_runners,                              // task_runners
           fml::WeakPtr<SnapshotDelegate>{},               // snapshot_delegate
+          fml::WeakPtr<HintFreedDelegate>{},              // hint_freed_delegate
           fml::WeakPtr<IOManager>{},                      // io_manager
           fml::RefPtr<SkiaUnrefQueue>{},                  // unref_queue
           fml::WeakPtr<ImageDecoder>{},                   // image_decoder

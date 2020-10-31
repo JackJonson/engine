@@ -16,7 +16,7 @@
 #include "third_party/skia/include/core/SkClipOp.h"
 #include "third_party/skia/include/core/SkData.h"
 #include "third_party/skia/include/core/SkImageFilter.h"
-#include "third_party/skia/include/core/SkMatrix44.h"
+#include "third_party/skia/include/core/SkM44.h"
 #include "third_party/skia/include/core/SkPath.h"
 #include "third_party/skia/include/core/SkRRect.h"
 #include "third_party/skia/include/core/SkRect.h"
@@ -57,7 +57,7 @@ class MockCanvas : public SkCanvasVirtualEnforcer<SkCanvas> {
   };
 
   struct ConcatMatrix44Data {
-    SkMatrix44 matrix;
+    SkM44 matrix;
   };
 
   struct SetMatrixData {
@@ -108,6 +108,10 @@ class MockCanvas : public SkCanvasVirtualEnforcer<SkCanvas> {
     ClipEdgeStyle style;
   };
 
+  struct DrawPaint {
+    SkPaint paint;
+  };
+
   // Discriminated union of all the different |DrawCall| types.  It is roughly
   // equivalent to the different methods in |SkCanvas|' public API.
   using DrawCallData = std::variant<SaveData,
@@ -123,7 +127,8 @@ class MockCanvas : public SkCanvasVirtualEnforcer<SkCanvas> {
                                     DrawShadowData,
                                     ClipRectData,
                                     ClipRRectData,
-                                    ClipPathData>;
+                                    ClipPathData,
+                                    DrawPaint>;
 
   // A single call made against this canvas.
   struct DrawCall {
@@ -145,7 +150,7 @@ class MockCanvas : public SkCanvasVirtualEnforcer<SkCanvas> {
   void willRestore() override;
   void didRestore() override {}
   void didConcat(const SkMatrix& matrix) override;
-  void didConcat44(const SkScalar matrix[]) override;
+  void didConcat44(const SkM44&) override;
   void didScale(SkScalar x, SkScalar y) override;
   void didTranslate(SkScalar x, SkScalar y) override;
   void didSetMatrix(const SkMatrix& matrix) override;
@@ -305,7 +310,10 @@ extern bool operator==(const MockCanvas::DrawCall& a,
                        const MockCanvas::DrawCall& b);
 extern std::ostream& operator<<(std::ostream& os,
                                 const MockCanvas::DrawCall& draw);
-
+extern bool operator==(const MockCanvas::DrawPaint& a,
+                       const MockCanvas::DrawPaint& b);
+extern std::ostream& operator<<(std::ostream& os,
+                                const MockCanvas::DrawPaint& data);
 }  // namespace testing
 }  // namespace flutter
 

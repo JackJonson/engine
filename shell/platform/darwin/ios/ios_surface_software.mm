@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "flutter/shell/platform/darwin/ios/ios_surface_software.h"
+#import "flutter/shell/platform/darwin/ios/ios_surface_software.h"
 
 #include <QuartzCore/CALayer.h>
 
@@ -15,10 +15,11 @@
 
 namespace flutter {
 
-IOSSurfaceSoftware::IOSSurfaceSoftware(fml::scoped_nsobject<CALayer> layer,
-                                       std::shared_ptr<IOSContext> context,
-                                       FlutterPlatformViewsController* platform_views_controller)
-    : IOSSurface(std::move(context), platform_views_controller), layer_(std::move(layer)) {}
+IOSSurfaceSoftware::IOSSurfaceSoftware(
+    fml::scoped_nsobject<CALayer> layer,
+    std::shared_ptr<IOSContext> context,
+    const std::shared_ptr<IOSExternalViewEmbedder>& external_view_embedder)
+    : IOSSurface(std::move(context), external_view_embedder), layer_(std::move(layer)) {}
 
 IOSSurfaceSoftware::~IOSSurfaceSoftware() = default;
 
@@ -33,7 +34,7 @@ void IOSSurfaceSoftware::UpdateStorageSizeIfNecessary() {
   // Android oddities.
 }
 
-std::unique_ptr<Surface> IOSSurfaceSoftware::CreateGPUSurface(GrContext* gr_context) {
+std::unique_ptr<Surface> IOSSurfaceSoftware::CreateGPUSurface(GrDirectContext* gr_context) {
   if (!IsValid()) {
     return nullptr;
   }
@@ -124,7 +125,7 @@ bool IOSSurfaceSoftware::PresentBackingStore(sk_sp<SkSurface> backing_store) {
 
 // |GPUSurfaceSoftwareDelegate|
 ExternalViewEmbedder* IOSSurfaceSoftware::GetExternalViewEmbedder() {
-  return GetExternalViewEmbedderIfEnabled();
+  return GetSurfaceExternalViewEmbedder().get();
 }
 
 }  // namespace flutter

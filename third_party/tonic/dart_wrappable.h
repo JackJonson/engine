@@ -37,7 +37,7 @@ class DartWrappable {
   // Override this to customize the object size reported to the Dart garbage
   // collector.
   // Implement using IMPLEMENT_WRAPPERTYPEINFO macro
-  virtual size_t GetAllocationSize();
+  virtual size_t GetAllocationSize() const;
 
   virtual void RetainDartWrappableReference() const = 0;
 
@@ -163,18 +163,6 @@ struct DartConverter<PTR<T>> {
                              const PTR<T>& val,
                              bool auto_scope = true) {
     DartConverter<T*>::SetReturnValue(args, val.get());
-  }
-};
-
-template <template <typename T> class PTR, typename T>
-struct DartListFactory<
-    PTR<T>,
-    typename std::enable_if<
-        std::is_convertible<T*, const DartWrappable*>::value>::type> {
-  static Dart_Handle NewList(intptr_t length) {
-    Dart_PersistentHandle type = T::GetDartType(DartState::Current());
-    TONIC_DCHECK(!LogIfError(type));
-    return Dart_NewListOfType(Dart_HandleFromPersistent(type), length);
   }
 };
 

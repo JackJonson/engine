@@ -3,15 +3,18 @@
 // found in the LICENSE file.
 
 // @dart = 2.6
+import 'package:test/bootstrap/browser.dart';
+import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart';
 
-import 'package:test/test.dart';
-
 void main() {
+  internalBootstrapBrowserTest(() => testMain);
+}
+
+void testMain() {
   setUpAll(() {
     WebExperiments.ensureInitialized();
-    Profiler.ensureInitialized();
   });
 
   test('Should be able to build and layout a paragraph', () {

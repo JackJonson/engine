@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "flutter/shell/gpu/gpu_surface_vulkan.h"
+
 #include "flutter/fml/logging.h"
 
 namespace flutter {
@@ -62,7 +63,7 @@ SkMatrix GPUSurfaceVulkan::GetRootTransformation() const {
   return matrix;
 }
 
-GrContext* GPUSurfaceVulkan::GetContext() {
+GrDirectContext* GPUSurfaceVulkan::GetContext() {
   return window_.GetSkiaGrContext();
 }
 

@@ -5,6 +5,7 @@
 #import "flutter/shell/platform/darwin/macos/framework/Headers/FlutterEngine.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterEngine_Internal.h"
 
+#include <algorithm>
 #include <vector>
 
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterDartProject_Internal.h"
@@ -13,9 +14,38 @@
 #import "flutter/shell/platform/embedder/embedder.h"
 
 /**
+ * Constructs and returns a FlutterLocale struct corresponding to |locale|, which must outlive
+ * the returned struct.
+ */
+static FlutterLocale FlutterLocaleFromNSLocale(NSLocale* locale) {
+  FlutterLocale flutterLocale = {};
+  flutterLocale.struct_size = sizeof(FlutterLocale);
+  flutterLocale.language_code = [[locale objectForKey:NSLocaleLanguageCode] UTF8String];
+  flutterLocale.country_code = [[locale objectForKey:NSLocaleCountryCode] UTF8String];
+  flutterLocale.script_code = [[locale objectForKey:NSLocaleScriptCode] UTF8String];
+  flutterLocale.variant_code = [[locale objectForKey:NSLocaleVariantCode] UTF8String];
+  return flutterLocale;
+}
+
+namespace {
+
+struct AotDataDeleter {
+  void operator()(FlutterEngineAOTData aot_data) { FlutterEngineCollectAOTData(aot_data); }
+};
+
+using UniqueAotDataPtr = std::unique_ptr<_FlutterEngineAOTData, AotDataDeleter>;
+
+}
+
+/**
  * Private interface declaration for FlutterEngine.
  */
 @interface FlutterEngine () <FlutterBinaryMessenger>
+
+/**
+ * Sends the list of user-preferred locales to the Flutter engine.
+ */
+- (void)sendUserLocales;
 
 /**
  * Called by the engine to make the context the engine should draw into current.
@@ -53,6 +83,12 @@
  * time is in the clock used by the Flutter engine.
  */
 - (void)postMainThreadTask:(FlutterTask)task targetTimeInNanoseconds:(uint64_t)targetTime;
+
+/**
+ * Loads the AOT snapshots and instructions from the elf bundle (app_elf_snapshot.so) if it is
+ * present in the assets directory.
+ */
+- (UniqueAotDataPtr)loadAOTData:(NSString*)assetsDir;
 
 @end
 
@@ -118,9 +154,9 @@ static bool OnPresent(FlutterEngine* engine) {
   return [engine engineCallbackOnPresent];
 }
 
-static uint32_t OnFBO(FlutterEngine* engine) {
-  // There is currently no case where a different FBO is used, so no need to forward.
-  return 0;
+static uint32_t OnFBO(FlutterEngine* engine, const FlutterFrameInfo* info) {
+  CGSize size = CGSizeMake(info->size.width, info->size.height);
+  return [engine.viewController.flutterView getFrameBufferIdForSize:size];
 }
 
 static bool OnMakeResourceCurrent(FlutterEngine* engine) {
@@ -163,6 +199,9 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
 
   // A mapping of textureID to internal FlutterExternalTextureGL adapter.
   NSMutableDictionary<NSNumber*, FlutterExternalTextureGL*>* _textures;
+
+  // Pointer to the Dart AOT snapshot and instruction data.
+  UniqueAotDataPtr _aotData;
 }
 
 - (instancetype)initWithName:(NSString*)labelPrefix project:(FlutterDartProject*)project {
@@ -179,6 +218,12 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
   _messageHandlers = [[NSMutableDictionary alloc] init];
   _textures = [[NSMutableDictionary alloc] init];
   _allowHeadlessExecution = allowHeadlessExecution;
+
+  NSNotificationCenter* notificationCenter = [NSNotificationCenter defaultCenter];
+  [notificationCenter addObserver:self
+                         selector:@selector(sendUserLocales)
+                             name:NSCurrentLocaleDidChangeNotification
+                           object:nil];
 
   return self;
 }
@@ -203,22 +248,39 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
       .open_gl.make_current = (BoolCallback)OnMakeCurrent,
       .open_gl.clear_current = (BoolCallback)OnClearCurrent,
       .open_gl.present = (BoolCallback)OnPresent,
-      .open_gl.fbo_callback = (UIntCallback)OnFBO,
+      .open_gl.fbo_with_frame_info_callback = (UIntFrameInfoCallback)OnFBO,
+      .open_gl.fbo_reset_after_present = true,
       .open_gl.make_resource_current = (BoolCallback)OnMakeResourceCurrent,
       .open_gl.gl_external_texture_frame_callback = (TextureFrameCallback)OnAcquireExternalTexture,
   };
 
   // TODO(stuartmorgan): Move internal channel registration from FlutterViewController to here.
 
+  // FlutterProjectArgs is expecting a full argv, so when processing it for
+  // flags the first item is treated as the executable and ignored. Add a dummy
+  // value so that all provided arguments are used.
+  std::vector<std::string> switches = _project.switches;
+  std::vector<const char*> argv = {"placeholder"};
+  std::transform(switches.begin(), switches.end(), std::back_inserter(argv),
+                 [](const std::string& arg) -> const char* { return arg.c_str(); });
+
+  std::vector<const char*> dartEntrypointArgs;
+  for (NSString* argument in [_project dartEntrypointArguments]) {
+    dartEntrypointArgs.push_back([argument UTF8String]);
+  }
+
   FlutterProjectArgs flutterArguments = {};
   flutterArguments.struct_size = sizeof(FlutterProjectArgs);
   flutterArguments.assets_path = _project.assetsPath.UTF8String;
   flutterArguments.icu_data_path = _project.ICUDataPath.UTF8String;
-  std::vector<const char*> arguments = _project.argv;
-  flutterArguments.command_line_argc = static_cast<int>(arguments.size());
-  flutterArguments.command_line_argv = &arguments[0];
+  flutterArguments.command_line_argc = static_cast<int>(argv.size());
+  flutterArguments.command_line_argv = argv.size() > 0 ? argv.data() : nullptr;
   flutterArguments.platform_message_callback = (FlutterPlatformMessageCallback)OnPlatformMessage;
   flutterArguments.custom_dart_entrypoint = entrypoint.UTF8String;
+  flutterArguments.shutdown_dart_vm_when_done = true;
+  flutterArguments.dart_entrypoint_argc = dartEntrypointArgs.size();
+  flutterArguments.dart_entrypoint_argv = dartEntrypointArgs.data();
+
   static size_t sTaskRunnerIdentifiers = 0;
   const FlutterTaskRunnerDescription cocoa_task_runner_description = {
       .struct_size = sizeof(FlutterTaskRunnerDescription),
@@ -236,9 +298,13 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
   const FlutterCustomTaskRunners custom_task_runners = {
       .struct_size = sizeof(FlutterCustomTaskRunners),
       .platform_task_runner = &cocoa_task_runner_description,
-      .render_task_runner = &cocoa_task_runner_description,
   };
   flutterArguments.custom_task_runners = &custom_task_runners;
+
+  _aotData = [self loadAOTData:_project.assetsPath];
+  if (_aotData) {
+    flutterArguments.aot_data = _aotData.get();
+  }
 
   FlutterEngineResult result = FlutterEngineInitialize(
       FLUTTER_ENGINE_VERSION, &rendererConfig, &flutterArguments, (__bridge void*)(self), &_engine);
@@ -253,8 +319,41 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
     return NO;
   }
 
+  [self sendUserLocales];
   [self updateWindowMetrics];
+  [self updateDisplayConfig];
+  self.viewController.flutterView.synchronousResizing = YES;
   return YES;
+}
+
+- (UniqueAotDataPtr)loadAOTData:(NSString*)assetsDir {
+  if (!FlutterEngineRunsAOTCompiledDartCode()) {
+    return nullptr;
+  }
+
+  BOOL isDirOut = false;  // required for NSFileManager fileExistsAtPath.
+  NSFileManager* fileManager = [NSFileManager defaultManager];
+
+  // This is the location where the test fixture places the snapshot file.
+  // For applications built by Flutter tool, this is in "App.framework".
+  NSString* elfPath = [NSString pathWithComponents:@[ assetsDir, @"app_elf_snapshot.so" ]];
+
+  if (![fileManager fileExistsAtPath:elfPath isDirectory:&isDirOut]) {
+    return nullptr;
+  }
+
+  FlutterEngineAOTDataSource source = {};
+  source.type = kFlutterEngineAOTDataSourceTypeElfPath;
+  source.elf_path = [elfPath cStringUsingEncoding:NSUTF8StringEncoding];
+
+  FlutterEngineAOTData data = nullptr;
+  auto result = FlutterEngineCreateAOTData(&source, &data);
+  if (result != kSuccess) {
+    NSLog(@"Failed to load AOT data from: %@", elfPath);
+    return nullptr;
+  }
+
+  return UniqueAotDataPtr(data);
 }
 
 - (void)setViewController:(FlutterViewController*)controller {
@@ -264,7 +363,9 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
     [self shutDownEngine];
     _resourceContext = nil;
   }
-  [self updateWindowMetrics];
+  if (_engine) {
+    self.viewController.flutterView.synchronousResizing = YES;
+  }
 }
 
 - (id<FlutterBinaryMessenger>)binaryMessenger {
@@ -282,7 +383,7 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
 - (NSOpenGLContext*)resourceContext {
   if (!_resourceContext) {
     NSOpenGLPixelFormatAttribute attributes[] = {
-        NSOpenGLPFAColorSize, 24, NSOpenGLPFAAlphaSize, 8, NSOpenGLPFADoubleBuffer, 0,
+        NSOpenGLPFAColorSize, 24, NSOpenGLPFAAlphaSize, 8, 0,
     };
     NSOpenGLPixelFormat* pixelFormat = [[NSOpenGLPixelFormat alloc] initWithAttributes:attributes];
     _resourceContext = [[NSOpenGLContext alloc] initWithFormat:pixelFormat shareContext:nil];
@@ -290,21 +391,49 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
   return _resourceContext;
 }
 
+- (void)updateDisplayConfig {
+  if (!_engine) {
+    return;
+  }
+
+  CVDisplayLinkRef displayLinkRef;
+  CGDirectDisplayID mainDisplayID = CGMainDisplayID();
+  CVDisplayLinkCreateWithCGDisplay(mainDisplayID, &displayLinkRef);
+  CVTime nominal = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(displayLinkRef);
+  if (!(nominal.flags & kCVTimeIsIndefinite)) {
+    double refreshRate = static_cast<double>(nominal.timeScale) / nominal.timeValue;
+
+    FlutterEngineDisplay display;
+    display.struct_size = sizeof(display);
+    display.display_id = mainDisplayID;
+    display.refresh_rate = round(refreshRate);
+
+    std::vector<FlutterEngineDisplay> displays = {display};
+    FlutterEngineNotifyDisplayUpdate(_engine, kFlutterEngineDisplaysUpdateTypeStartup,
+                                     displays.data(), displays.size());
+  }
+
+  CVDisplayLinkRelease(displayLinkRef);
+}
+
 - (void)updateWindowMetrics {
   if (!_engine) {
     return;
   }
   NSView* view = _viewController.view;
-  CGSize scaledSize = [view convertRectToBacking:view.bounds].size;
+  CGRect scaledBounds = [view convertRectToBacking:view.bounds];
+  CGSize scaledSize = scaledBounds.size;
   double pixelRatio = view.bounds.size.width == 0 ? 1 : scaledSize.width / view.bounds.size.width;
 
-  const FlutterWindowMetricsEvent event = {
-      .struct_size = sizeof(event),
+  const FlutterWindowMetricsEvent windowMetricsEvent = {
+      .struct_size = sizeof(windowMetricsEvent),
       .width = static_cast<size_t>(scaledSize.width),
       .height = static_cast<size_t>(scaledSize.height),
       .pixel_ratio = pixelRatio,
+      .left = static_cast<size_t>(scaledBounds.origin.x),
+      .top = static_cast<size_t>(scaledBounds.origin.y),
   };
-  FlutterEngineSendWindowMetricsEvent(_engine, &event);
+  FlutterEngineSendWindowMetricsEvent(_engine, &windowMetricsEvent);
 }
 
 - (void)sendPointerEvent:(const FlutterPointerEvent&)event {
@@ -312,6 +441,29 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
 }
 
 #pragma mark - Private methods
+
+- (void)sendUserLocales {
+  if (!self.running) {
+    return;
+  }
+
+  // Create a list of FlutterLocales corresponding to the preferred languages.
+  NSMutableArray<NSLocale*>* locales = [NSMutableArray array];
+  std::vector<FlutterLocale> flutterLocales;
+  flutterLocales.reserve(locales.count);
+  for (NSString* localeID in [NSLocale preferredLanguages]) {
+    NSLocale* locale = [[NSLocale alloc] initWithLocaleIdentifier:localeID];
+    [locales addObject:locale];
+    flutterLocales.push_back(FlutterLocaleFromNSLocale(locale));
+  }
+  // Convert to a list of pointers, and send to the engine.
+  std::vector<const FlutterLocale*> flutterLocaleList;
+  flutterLocaleList.reserve(flutterLocales.size());
+  std::transform(
+      flutterLocales.begin(), flutterLocales.end(), std::back_inserter(flutterLocaleList),
+      [](const auto& arg) -> const auto* { return &arg; });
+  FlutterEngineUpdateLocales(_engine, flutterLocaleList.data(), flutterLocaleList.size());
+}
 
 - (bool)engineCallbackOnMakeCurrent {
   if (!_mainOpenGLContext) {
@@ -328,8 +480,9 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
 
 - (bool)engineCallbackOnPresent {
   if (!_mainOpenGLContext) {
+    return false;
   }
-  [_mainOpenGLContext flushBuffer];
+  [self.viewController.flutterView present];
   return true;
 }
 
@@ -447,9 +600,15 @@ static bool OnAcquireExternalTexture(FlutterEngine* engine,
   }
 }
 
-- (void)setMessageHandlerOnChannel:(nonnull NSString*)channel
-              binaryMessageHandler:(nullable FlutterBinaryMessageHandler)handler {
+- (FlutterBinaryMessengerConnection)setMessageHandlerOnChannel:(nonnull NSString*)channel
+                                          binaryMessageHandler:
+                                              (nullable FlutterBinaryMessageHandler)handler {
   _messageHandlers[channel] = [handler copy];
+  return 0;
+}
+
+- (void)cleanupConnection:(FlutterBinaryMessengerConnection)connection {
+  // There hasn't been a need to implement this yet for macOS.
 }
 
 #pragma mark - FlutterPluginRegistry

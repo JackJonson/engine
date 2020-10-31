@@ -4,22 +4,25 @@
 
 assert(is_mac || is_ios)
 
+import("//flutter/shell/platform/config.gni")
 import("//flutter/testing/testing.gni")
 
 group("darwin") {
   if (is_ios) {
-    deps = [
-      "ios:flutter_framework",
-    ]
+    deps = [ "ios:flutter_framework" ]
   }
   if (is_mac) {
-    deps = [
-      "macos",
-    ]
+    deps = []
+    if (enable_desktop_embeddings) {
+      deps += [ "macos" ]
+    }
   }
 }
 
 source_set("flutter_channels") {
+  cflags_objc = flutter_cflags_objc
+  cflags_objcc = flutter_cflags_objcc
+
   sources = [
     "common/buffer_conversions.h",
     "common/buffer_conversions.mm",

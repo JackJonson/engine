@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// @dart=2.8
 library flutter_frontend_server;
 
 import 'dart:async';
@@ -28,10 +29,12 @@ class _FlutterFrontendCompiler implements frontend.CompilerInterface {
   _FlutterFrontendCompiler(StringSink output,
       {bool unsafePackageSerialization,
       bool useDebuggerModuleNames,
+      bool emitDebugMetadata,
       frontend.ProgramTransformer transformer})
       : _compiler = frontend.FrontendCompiler(output,
             transformer: transformer,
             useDebuggerModuleNames: useDebuggerModuleNames,
+            emitDebugMetadata: emitDebugMetadata,
             unsafePackageSerialization: unsafePackageSerialization);
 
   @override
@@ -144,8 +147,6 @@ Future<int> starter(
           '--target=flutter',
           '--track-widget-creation',
           '--enable-asserts',
-          '--gen-bytecode',
-          '--bytecode-options=source-positions,local-var-info,debugger-stops,instance-field-initializers,keep-unreachable-code,avoid-closure-call-instructions',
         ]);
         compiler ??= _FlutterFrontendCompiler(
           output,
@@ -171,6 +172,7 @@ Future<int> starter(
   compiler ??= _FlutterFrontendCompiler(output,
       transformer: ToStringTransformer(transformer, deleteToStringPackageUris),
       useDebuggerModuleNames: options['debugger-module-names'] as bool,
+      emitDebugMetadata: options['experimental-emit-debug-metadata'] as bool,
       unsafePackageSerialization:
           options['unsafe-package-serialization'] as bool);
 
@@ -220,7 +222,7 @@ class ToStringVisitor extends RecursiveVisitor<void> {
   @override
   void visitProcedure(Procedure node) {
     if (
-      node.name.name        == 'toString' &&
+      node.name.text        == 'toString' &&
       node.enclosingClass   != null       &&
       node.enclosingLibrary != null       &&
       !node.isStatic                      &&

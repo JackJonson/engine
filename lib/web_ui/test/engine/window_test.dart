@@ -4,13 +4,20 @@
 
 // @dart = 2.6
 import 'dart:async';
+import 'dart:js_util' as js_util;
+import 'dart:html' as html;
 import 'dart:typed_data';
 
+import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 import 'package:ui/ui.dart' as ui;
 import 'package:ui/src/engine.dart';
 
 void main() {
+  internalBootstrapBrowserTest(() => testMain);
+}
+
+void testMain() {
   test('onTextScaleFactorChanged preserves the zone', () {
     final Zone innerZone = Zone.current.fork();
 
@@ -24,7 +31,7 @@ void main() {
       expect(window.onTextScaleFactorChanged, same(callback));
     });
 
-    window.invokeOnTextScaleFactorChanged();
+    EnginePlatformDispatcher.instance.invokeOnTextScaleFactorChanged();
   });
 
   test('onPlatformBrightnessChanged preserves the zone', () {
@@ -40,7 +47,7 @@ void main() {
       expect(window.onPlatformBrightnessChanged, same(callback));
     });
 
-    window.invokeOnPlatformBrightnessChanged();
+    EnginePlatformDispatcher.instance.invokeOnPlatformBrightnessChanged();
   });
 
   test('onMetricsChanged preserves the zone', () {
@@ -56,7 +63,7 @@ void main() {
       expect(window.onMetricsChanged, same(callback));
     });
 
-    window.invokeOnMetricsChanged();
+    EnginePlatformDispatcher.instance.invokeOnMetricsChanged();
   });
 
   test('onLocaleChanged preserves the zone', () {
@@ -72,7 +79,7 @@ void main() {
       expect(window.onLocaleChanged, same(callback));
     });
 
-    window.invokeOnLocaleChanged();
+    EnginePlatformDispatcher.instance.invokeOnLocaleChanged();
   });
 
   test('onBeginFrame preserves the zone', () {
@@ -88,7 +95,7 @@ void main() {
       expect(window.onBeginFrame, same(callback));
     });
 
-    window.invokeOnBeginFrame(null);
+    EnginePlatformDispatcher.instance.invokeOnBeginFrame(null);
   });
 
   test('onReportTimings preserves the zone', () {
@@ -104,7 +111,7 @@ void main() {
       expect(window.onReportTimings, same(callback));
     });
 
-    window.invokeOnReportTimings(null);
+    EnginePlatformDispatcher.instance.invokeOnReportTimings(null);
   });
 
   test('onDrawFrame preserves the zone', () {
@@ -120,7 +127,7 @@ void main() {
       expect(window.onDrawFrame, same(callback));
     });
 
-    window.invokeOnDrawFrame();
+    EnginePlatformDispatcher.instance.invokeOnDrawFrame();
   });
 
   test('onPointerDataPacket preserves the zone', () {
@@ -136,7 +143,7 @@ void main() {
       expect(window.onPointerDataPacket, same(callback));
     });
 
-    window.invokeOnPointerDataPacket(null);
+    EnginePlatformDispatcher.instance.invokeOnPointerDataPacket(null);
   });
 
   test('onSemanticsEnabledChanged preserves the zone', () {
@@ -152,7 +159,7 @@ void main() {
       expect(window.onSemanticsEnabledChanged, same(callback));
     });
 
-    window.invokeOnSemanticsEnabledChanged();
+    EnginePlatformDispatcher.instance.invokeOnSemanticsEnabledChanged();
   });
 
   test('onSemanticsAction preserves the zone', () {
@@ -168,7 +175,7 @@ void main() {
       expect(window.onSemanticsAction, same(callback));
     });
 
-    window.invokeOnSemanticsAction(null, null, null);
+    EnginePlatformDispatcher.instance.invokeOnSemanticsAction(null, null, null);
   });
 
   test('onAccessibilityFeaturesChanged preserves the zone', () {
@@ -184,7 +191,7 @@ void main() {
       expect(window.onAccessibilityFeaturesChanged, same(callback));
     });
 
-    window.invokeOnAccessibilityFeaturesChanged();
+    EnginePlatformDispatcher.instance.invokeOnAccessibilityFeaturesChanged();
   });
 
   test('onPlatformMessage preserves the zone', () {
@@ -200,7 +207,7 @@ void main() {
       expect(window.onPlatformMessage, same(callback));
     });
 
-    window.invokeOnPlatformMessage(null, null, null);
+    EnginePlatformDispatcher.instance.invokeOnPlatformMessage(null, null, null);
   });
 
   test('sendPlatformMessage preserves the zone', () async {
@@ -221,5 +228,89 @@ void main() {
     });
 
     await completer.future;
+  });
+
+  test('sendPlatformMessage responds even when channel is unknown', () async {
+    bool responded = false;
+
+    final ByteData inputData = ByteData(4);
+    inputData.setUint32(0, 42);
+    window.sendPlatformMessage(
+      'flutter/__unknown__channel__',
+      null,
+      (outputData) {
+        responded = true;
+        expect(outputData, isNull);
+      },
+    );
+
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    expect(responded, isTrue);
+  });
+
+  /// Regression test for https://github.com/flutter/flutter/issues/66128.
+  test('setPreferredOrientation responds even if browser doesn\'t support api', () async {
+    final html.Screen screen = html.window.screen;
+    js_util.setProperty(screen, 'orientation', null);
+    bool responded = false;
+
+    final Completer<void> completer = Completer<void>();
+    final ByteData inputData = JSONMethodCodec().encodeMethodCall(MethodCall(
+        'SystemChrome.setPreferredOrientations',
+        <dynamic>[]));
+
+    window.sendPlatformMessage(
+      'flutter/platform',
+          inputData,
+          (outputData) {
+        responded = true;
+        completer.complete();
+      },
+    );
+    await completer.future;
+    expect(responded, true);
+  });
+
+  test('Window implements locale, locales, and locale change notifications', () async {
+    // This will count how many times we notified about locale changes.
+    int localeChangedCount = 0;
+    window.onLocaleChanged = () {
+      localeChangedCount += 1;
+    };
+
+    // Cause DomRenderer to initialize itself.
+    domRenderer;
+
+    // We populate the initial list of locales automatically (only test that we
+    // got some locales; some contributors may be in different locales, so we
+    // can't test the exact contents).
+    expect(window.locale, isA<ui.Locale>());
+    expect(window.locales, isNotEmpty);
+
+    // Trigger a change notification (reset locales because the notification
+    // doesn't actually change the list of languages; the test only observes
+    // that the list is populated again).
+    EnginePlatformDispatcher.instance.debugResetLocales();
+    expect(window.locales, isEmpty);
+    expect(localeChangedCount, 0);
+    html.window.dispatchEvent(html.Event('languagechange'));
+    expect(window.locales, isNotEmpty);
+    expect(localeChangedCount, 1);
+  });
+
+  test('dispatches browser event on flutter/service_worker channel', () async {
+    final Completer<void> completer = Completer<void>();
+    html.window.addEventListener('flutter-first-frame', completer.complete);
+    final Zone innerZone = Zone.current.fork();
+
+    innerZone.runGuarded(() {
+      window.sendPlatformMessage(
+        'flutter/service_worker',
+        ByteData(0),
+        (outputData) { },
+      );
+    });
+
+    await expectLater(completer.future, completes);
   });
 }
